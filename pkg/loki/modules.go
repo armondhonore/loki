@@ -1917,9 +1917,6 @@ func (t *Loki) initBloomPlanner() (services.Service, error) {
 		return nil, nil
 	}
 
-	logger := log.With(util_log.Logger, "component", "bloom-planner")
-
-	var ringManager *lokiring.RingManager
 	p, err := planner.New(
 		t.Cfg.BloomBuild.Planner,
 		t.Overrides,
@@ -1927,9 +1924,8 @@ func (t *Loki) initBloomPlanner() (services.Service, error) {
 		t.Cfg.StorageConfig,
 		t.ClientMetrics,
 		t.BloomStore,
-		logger,
+		log.With(util_log.Logger, "component", "bloom-planner"),
 		prometheus.DefaultRegisterer,
-		ringManager,
 	)
 	if err != nil {
 		return nil, err
@@ -1956,9 +1952,6 @@ func (t *Loki) initBloomBuilder() (services.Service, error) {
 		return nil, nil
 	}
 
-	logger := log.With(util_log.Logger, "component", "bloom-builder")
-
-	var ringManager *lokiring.RingManager
 	return builder.New(
 		t.Cfg.BloomBuild.Builder,
 		t.Overrides,
@@ -1968,9 +1961,8 @@ func (t *Loki) initBloomBuilder() (services.Service, error) {
 		t.Store,
 		t.BloomStore,
 		t.bloomGatewayClient,
-		logger,
+		log.With(util_log.Logger, "component", "bloom-builder"),
 		prometheus.DefaultRegisterer,
-		ringManager,
 	)
 }
 
