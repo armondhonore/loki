@@ -381,6 +381,65 @@ func TestBuilder_CopyAndSort_SortSchema(t *testing.T) {
 		}
 	}
 
+	streamAppsInIDOrder := func(t *testing.T, obj *dataobj.Object, tenant string) []string {
+		t.Helper()
+		var order []string
+		for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool {
+			return streams.CheckSection(s) && s.Tenant == tenant
+		}) {
+			streamSec, err := streams.Open(t.Context(), sec)
+			require.NoError(t, err)
+			for res := range streams.IterSection(t.Context(), streamSec) {
+				val, err := res.Value()
+				require.NoError(t, err)
+				require.Equal(t, int64(len(order)+1), val.ID, "stream IDs must be reassigned contiguously in stream section order")
+				order = append(order, val.Labels.Get("app"))
+			}
+		}
+		return order
+	}
+
+	logStreamIDsNonDecreasing := func(t *testing.T, obj *dataobj.Object, tenant string) {
+		t.Helper()
+		var prev int64
+		for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool {
+			return logs.CheckSection(s) && s.Tenant == tenant
+		}) {
+			for res := range iterLogsSection(t, sec) {
+				val, err := res.Value()
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, val.StreamID, prev, "log stream IDs must be non-decreasing after schema sort")
+				prev = val.StreamID
+			}
+		}
+	}
+
+	logLinesMatchStreamApps := func(t *testing.T, obj *dataobj.Object, tenant string) {
+		t.Helper()
+		streamToApp := make(map[int64]string)
+		for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool {
+			return streams.CheckSection(s) && s.Tenant == tenant
+		}) {
+			streamSec, err := streams.Open(t.Context(), sec)
+			require.NoError(t, err)
+			for res := range streams.IterSection(t.Context(), streamSec) {
+				val, err := res.Value()
+				require.NoError(t, err)
+				streamToApp[val.ID] = val.Labels.Get("app")
+			}
+		}
+		for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool {
+			return logs.CheckSection(s) && s.Tenant == tenant
+		}) {
+			for res := range iterLogsSection(t, sec) {
+				val, err := res.Value()
+				require.NoError(t, err)
+				require.True(t, strings.HasPrefix(string(val.Line), streamToApp[val.StreamID]),
+					"log line %q must still reference stream ID %d with app=%q", string(val.Line), val.StreamID, streamToApp[val.StreamID])
+			}
+		}
+	}
+
 	t.Run("schema tenant sorted by label, plain tenant by DataobjSortOrder", func(t *testing.T) {
 		cfg := makeCfg(true)
 		overrides := tenantOverrides{"schema-tenant": {"label:app"}}
@@ -407,7 +466,10 @@ func TestBuilder_CopyAndSort_SortSchema(t *testing.T) {
 		obj2 := copyAndSort(t, cfg, obj1, overrides)
 
 		require.Equal(t, []string{"alpha", "middle", "zoo"}, appOrder(t, obj2, "schema-tenant"))
+		require.Equal(t, []string{"alpha", "middle", "zoo"}, streamAppsInIDOrder(t, obj2, "schema-tenant"))
 		timestampsDescWithinGroups(t, obj2, "schema-tenant")
+		logStreamIDsNonDecreasing(t, obj2, "schema-tenant")
+		logLinesMatchStreamApps(t, obj2, "schema-tenant")
 
 		var allTS []time.Time
 		for _, sec := range obj2.Sections().Filter(func(s *dataobj.Section) bool {
@@ -507,6 +569,74 @@ func TestBuilder_CopyAndSort_SortSchema(t *testing.T) {
 			}
 		}
 		require.Equal(t, []pair{{"ns-a", "app-a"}, {"ns-a", "app-z"}, {"ns-b", "app-a"}, {"ns-b", "app-z"}}, got)
+	})
+
+	t.Run("remap preserves log stream associations", func(t *testing.T) {
+		cfg := makeCfg(true)
+		overrides := tenantOverrides{"t1": {"label:app"}}
+		b, err := NewBuilder(cfg, nil, NewBuilderMetrics())
+		require.NoError(t, err)
+		b.SetOverrides(overrides)
+
+		type streamDef struct {
+			app      string
+			instance string
+		}
+		streamsToAppend := []streamDef{
+			{app: "frontend", instance: "a"},
+			{app: "backend", instance: "a"},
+			{app: "frontend", instance: "b"},
+			{app: "backend", instance: "b"},
+		}
+		expectedLines := make(map[string]struct{})
+		for _, stream := range streamsToAppend {
+			for i := range 2 {
+				line := fmt.Sprintf("%s/%s/%d", stream.app, stream.instance, i)
+				expectedLines[line] = struct{}{}
+				require.NoError(t, b.Append("t1", logproto.Stream{
+					Labels: fmt.Sprintf(`{app=%q,instance=%q}`, stream.app, stream.instance),
+					Entries: []push.Entry{{
+						Timestamp: now.Add(time.Duration(i) * time.Second),
+						Line:      line,
+					}},
+				}, now.Add(time.Duration(i)*time.Second)))
+			}
+		}
+		obj1, closer1, err := b.Flush()
+		require.NoError(t, err)
+		defer closer1.Close()
+
+		obj2 := copyAndSort(t, cfg, obj1, overrides)
+
+		streamToPrefix := make(map[int64]string)
+		for _, sec := range obj2.Sections().Filter(func(s *dataobj.Section) bool {
+			return streams.CheckSection(s) && s.Tenant == "t1"
+		}) {
+			streamSec, err := streams.Open(t.Context(), sec)
+			require.NoError(t, err)
+			for res := range streams.IterSection(t.Context(), streamSec) {
+				val, err := res.Value()
+				require.NoError(t, err)
+				streamToPrefix[val.ID] = val.Labels.Get("app") + "/" + val.Labels.Get("instance")
+			}
+		}
+		require.Len(t, streamToPrefix, len(streamsToAppend))
+
+		gotLines := make(map[string]struct{})
+		for _, sec := range obj2.Sections().Filter(func(s *dataobj.Section) bool {
+			return logs.CheckSection(s) && s.Tenant == "t1"
+		}) {
+			for res := range iterLogsSection(t, sec) {
+				val, err := res.Value()
+				require.NoError(t, err)
+				prefix, ok := streamToPrefix[val.StreamID]
+				require.True(t, ok, "log references missing stream ID %d", val.StreamID)
+				require.True(t, strings.HasPrefix(string(val.Line), prefix+"/"),
+					"log line %q must match labels for remapped stream ID %d (%q)", string(val.Line), val.StreamID, prefix)
+				gotLines[string(val.Line)] = struct{}{}
+			}
+		}
+		require.Equal(t, expectedLines, gotLines)
 	})
 
 	t.Run("flag off: schema config ignored, DataobjSortOrder used", func(t *testing.T) {

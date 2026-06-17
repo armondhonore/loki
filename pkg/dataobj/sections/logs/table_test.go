@@ -145,13 +145,12 @@ func TestSortRecords_SortSchemaASC(t *testing.T) {
 	t3 := time.Unix(3, 0)
 
 	records := []Record{
-		{StreamID: 10, Timestamp: t1, SortKey: "app-b", Line: []byte("b-old")},
-		{StreamID: 10, Timestamp: t1, SortKey: "app-b", Line: []byte("b-old-2")}, // Stable sort: Ensure a second record with the same sort key is emitted in the order it was presented.
-		{StreamID: 20, Timestamp: t3, SortKey: "app-a", Line: []byte("a-new")},
-		{StreamID: 21, Timestamp: t1, SortKey: "app-a", Line: []byte("a-old")},
-		{StreamID: 11, Timestamp: t2, SortKey: "app-b", Line: []byte("b-mid")},
-		{StreamID: 22, Timestamp: t2, SortKey: "app-a", Line: []byte("a-mid")},
-		{StreamID: 12, Timestamp: t3, SortKey: "app-b", Line: []byte("b-new")},
+		{StreamID: 4, Timestamp: t1, SortKey: "app-b", Line: []byte("b-4-old")},
+		{StreamID: 2, Timestamp: t3, SortKey: "app-a", Line: []byte("a-2-new")},
+		{StreamID: 2, Timestamp: t1, SortKey: "app-a", Line: []byte("a-2-old")},
+		{StreamID: 3, Timestamp: t2, SortKey: "app-b", Line: []byte("b-3-mid")},
+		{StreamID: 1, Timestamp: t2, SortKey: "app-a", Line: []byte("a-1-mid")},
+		{StreamID: 4, Timestamp: t3, SortKey: "app-b", Line: []byte("b-4-new")},
 	}
 
 	sortRecords(records, SortSchemaASC)
@@ -161,17 +160,20 @@ func TestSortRecords_SortSchemaASC(t *testing.T) {
 		lines = append(lines, string(r.Line))
 	}
 
-	// app-a records first (sort key ASC), timestamp DESC within group
-	require.Equal(t, []string{"a-new", "a-mid", "a-old", "b-new", "b-mid", "b-old", "b-old-2"}, lines)
+	// Records are ordered by [sort key ASC, stream ID ASC, timestamp DESC].
+	require.Equal(t, []string{"a-1-mid", "a-2-new", "a-2-old", "b-3-mid", "b-4-new", "b-4-old"}, lines)
 
 	for i := 0; i < len(records)-1; i++ {
 		a, b := records[i], records[i+1]
-		if a.SortKey == b.SortKey {
-			require.True(t, a.Timestamp.After(b.Timestamp) || a.Timestamp.Equal(b.Timestamp),
-				"within same sort key, timestamps must be DESC: got %v then %v", a.Timestamp, b.Timestamp)
-		} else {
+		if a.SortKey != b.SortKey {
 			require.LessOrEqual(t, a.SortKey, b.SortKey,
 				"sort keys must be ASC across groups: got %q then %q", a.SortKey, b.SortKey)
+		} else if a.StreamID != b.StreamID {
+			require.LessOrEqual(t, a.StreamID, b.StreamID,
+				"stream IDs must be ASC within sort key %q: got %d then %d", a.SortKey, a.StreamID, b.StreamID)
+		} else {
+			require.True(t, a.Timestamp.After(b.Timestamp) || a.Timestamp.Equal(b.Timestamp),
+				"timestamps must be DESC within sort key %q and stream ID %d: got %v then %v", a.SortKey, a.StreamID, a.Timestamp, b.Timestamp)
 		}
 	}
 }

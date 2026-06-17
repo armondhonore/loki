@@ -2,11 +2,13 @@
 package logsobj
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -450,8 +452,8 @@ func (b *Builder) Flush() (*dataobj.Object, io.Closer, error) {
 // CopyAndSort takes an existing [dataobj.Object] and rewrites the logs sections
 // so the logs are sorted object-wide. The order of the sections is deterministic.
 // For each tenant, first come the streams sections in the order of the old object
-// and second come the new, rewritten logs sections. Tenants are sorted in natural
-// order.
+// (or schema sort-key order when stream IDs are remapped), and second come the
+// new, rewritten logs sections. Tenants are sorted in natural order.
 func (b *Builder) CopyAndSort(ctx context.Context, obj *dataobj.Object) (*dataobj.Object, io.Closer, error) {
 	// Must reset builder when done.
 	defer b.Reset()
@@ -477,28 +479,6 @@ func (b *Builder) CopyAndSort(ctx context.Context, obj *dataobj.Object) (*dataob
 		case <-ctx.Done():
 			return nil, nil, ctx.Err()
 		default:
-		}
-
-		for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool { return streams.CheckSection(s) && s.Tenant == tenant }) {
-			sb.Reset()
-			sb.SetTenant(sec.Tenant)
-			// Copy section into new builder. This is *very* inefficient at the moment!
-			// TODO(chaudum): Create implementation of SectionBuilder interface that can copy entire ranges from a SectionReader.
-			section, err := streams.Open(ctx, sec)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to open streams section: %w", err)
-			}
-			iter := streams.IterSection(ctx, section)
-			for res := range iter {
-				val, err := res.Value()
-				if err != nil {
-					return nil, nil, err
-				}
-				sb.AppendValue(val)
-			}
-			if err := b.builder.Append(sb); err != nil {
-				return nil, nil, err
-			}
 		}
 
 		var sections []*dataobj.Section
@@ -538,14 +518,45 @@ func (b *Builder) CopyAndSort(ctx context.Context, obj *dataobj.Object) (*dataob
 			}
 		}
 
+		var streamRemap streamIDRemap
 		if len(schemaLabels) > 0 {
-			sortKeys, err := buildSortKeys(ctx, obj, tenant, schemaLabels)
+			var err error
+			streamRemap, err = buildStreamIDRemap(ctx, obj, tenant, schemaLabels)
 			if err != nil {
-				return nil, nil, fmt.Errorf("building sort keys for tenant %s: %w", tenant, err)
+				return nil, nil, fmt.Errorf("building stream ID remap for tenant %s: %w", tenant, err)
+			}
+			sb.Reset()
+			sb.SetTenant(tenant)
+			for _, stream := range streamRemap.streams {
+				sb.AppendValue(stream)
+			}
+			if err := b.builder.Append(sb); err != nil {
+				return nil, nil, err
 			}
 			sortOrder = logs.SortSchemaASC
-			iter, iterErr = sortedSchemaIter(ctx, sections, sortKeys, parseSortOrder(b.cfg.DataobjSortOrder))
+			iter, iterErr = sortedSchemaIter(ctx, sections, streamRemap.sortKeys, streamRemap.ids, parseSortOrder(b.cfg.DataobjSortOrder))
 		} else {
+			for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool { return streams.CheckSection(s) && s.Tenant == tenant }) {
+				sb.Reset()
+				sb.SetTenant(sec.Tenant)
+				// Copy section into new builder. This is *very* inefficient at the moment!
+				// TODO(chaudum): Create implementation of SectionBuilder interface that can copy entire ranges from a SectionReader.
+				section, err := streams.Open(ctx, sec)
+				if err != nil {
+					return nil, nil, fmt.Errorf("failed to open streams section: %w", err)
+				}
+				iter := streams.IterSection(ctx, section)
+				for res := range iter {
+					val, err := res.Value()
+					if err != nil {
+						return nil, nil, err
+					}
+					sb.AppendValue(val)
+				}
+				if err := b.builder.Append(sb); err != nil {
+					return nil, nil, err
+				}
+			}
 			sortOrder = parseSortOrder(b.cfg.DataobjSortOrder)
 			iter, iterErr = sortmerge.Iterator(ctx, sections, sortOrder)
 		}
@@ -651,28 +662,64 @@ func (b *Builder) drainLogsIter(ctx context.Context, iter result.Seq[logs.Record
 	return b.builder.Append(lb)
 }
 
-func buildSortKeys(ctx context.Context, obj *dataobj.Object, tenant string, schemaLabels []string) (map[int64]string, error) {
-	sortKeys := make(map[int64]string)
+type streamIDRemap struct {
+	streams  []streams.Stream
+	sortKeys map[int64]string
+	ids      map[int64]int64
+}
+
+type streamWithSortKey struct {
+	stream  streams.Stream
+	sortKey string
+	oldID   int64
+}
+
+func buildStreamIDRemap(ctx context.Context, obj *dataobj.Object, tenant string, schemaLabels []string) (streamIDRemap, error) {
+	var collected []streamWithSortKey
 	for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool {
 		return streams.CheckSection(s) && s.Tenant == tenant
 	}) {
 		section, err := streams.Open(ctx, sec)
 		if err != nil {
-			return nil, fmt.Errorf("opening streams section: %w", err)
+			return streamIDRemap{}, fmt.Errorf("opening streams section: %w", err)
 		}
 		for res := range streams.IterSection(ctx, section) {
 			stream, err := res.Value()
 			if err != nil {
-				return nil, err
+				return streamIDRemap{}, err
 			}
 			k, err := computeSortKey(stream.Labels, schemaLabels)
 			if err != nil {
-				return nil, err
+				return streamIDRemap{}, err
 			}
-			sortKeys[stream.ID] = k
+			collected = append(collected, streamWithSortKey{
+				stream:  stream,
+				sortKey: k,
+				oldID:   stream.ID,
+			})
 		}
 	}
-	return sortKeys, nil
+
+	slices.SortFunc(collected, func(a, b streamWithSortKey) int {
+		if res := cmp.Compare(a.sortKey, b.sortKey); res != 0 {
+			return res
+		}
+		return cmp.Compare(a.oldID, b.oldID)
+	})
+
+	remap := streamIDRemap{
+		streams:  make([]streams.Stream, 0, len(collected)),
+		sortKeys: make(map[int64]string, len(collected)),
+		ids:      make(map[int64]int64, len(collected)),
+	}
+	for i, entry := range collected {
+		newID := int64(i + 1)
+		remap.sortKeys[entry.oldID] = entry.sortKey
+		remap.ids[entry.oldID] = newID
+		entry.stream.ID = newID
+		remap.streams = append(remap.streams, entry.stream)
+	}
+	return remap, nil
 }
 
 // computeSortKey builds a composite sort key from stream labels using FQN entries.

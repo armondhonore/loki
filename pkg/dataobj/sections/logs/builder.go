@@ -376,6 +376,7 @@ func sortInfo(sort SortOrder, schemaLabels []string) *datasetmd_v2.SortInfo {
 		return &datasetmd_v2.SortInfo{
 			SchemaLabels: schemaLabels,
 			ColumnSorts: []*datasetmd_v2.SortInfo_ColumnSort{
+				{ColumnIndex: 0, Direction: datasetmd_v2.SORT_DIRECTION_ASCENDING},  // StreamID ASC
 				{ColumnIndex: 1, Direction: datasetmd_v2.SORT_DIRECTION_DESCENDING}, // Timestamp DESC
 			},
 		}

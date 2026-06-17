@@ -74,7 +74,11 @@ func sortRecords(records []Record, sortOrder SortOrder) {
 			}
 			return cmp.Compare(a.StreamID, b.StreamID)
 		case SortSchemaASC:
+			// Sort by [schema sort key ASC, streamID ASC, timestamp DESC].
 			if res := cmp.Compare(a.SortKey, b.SortKey); res != 0 {
+				return res
+			}
+			if res := cmp.Compare(a.StreamID, b.StreamID); res != 0 {
 				return res
 			}
 			return b.Timestamp.Compare(a.Timestamp)
