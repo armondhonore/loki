@@ -1,5 +1,22 @@
 ## Main
 
+## [0.10.3](https://github.com/grafana/loki/compare/operator/v0.10.2...operator/v0.10.3) (2026-06-18)
+
+
+### Features
+
+* **operator:** Produce metrics about managed LokiStacks ([#21838](https://github.com/grafana/loki/issues/21838)) ([2f0e0ba](https://github.com/grafana/loki/commit/2f0e0ba33dd491025ac7d078eebca7d227eb36ac))
+* **operator:** Update Loki operand to v3.7.2 ([#22075](https://github.com/grafana/loki/issues/22075)) ([01499dc](https://github.com/grafana/loki/commit/01499dc298a0366487110ca1f0c18d37faf8bb16))
+
+
+### Bug Fixes
+
+* **deps:** Update google.golang.org/grpc to v1.81.1 (main) ([#21852](https://github.com/grafana/loki/issues/21852)) ([1983d05](https://github.com/grafana/loki/commit/1983d05237f7eea0b58832cde42a2454b1f7e536))
+* **operator:** Bind opa-openshift to loopback interface ([#21203](https://github.com/grafana/loki/issues/21203)) ([f745bd9](https://github.com/grafana/loki/commit/f745bd9b8a5c2b5b256eba6efc2af72c2153675c))
+* **operator:** Clarify LokiIngesterFlushFailureRateCritical alert description ([#22341](https://github.com/grafana/loki/issues/22341)) ([bdae5cc](https://github.com/grafana/loki/commit/bdae5cc804356ff36b476f6e4aead8e5162aaf1d))
+* **operator:** Ensure ingesters store tokens ([#21770](https://github.com/grafana/loki/issues/21770)) ([df2f604](https://github.com/grafana/loki/commit/df2f604389c1137710b7475539fc7e51b25f8506))
+* **operator:** Update all components PDBs to maxUnavailable of 1 ([#22429](https://github.com/grafana/loki/issues/22429)) ([6ff9753](https://github.com/grafana/loki/commit/6ff9753e1e75e7d79a300a68ed05073c5a4d7aa6))
+
 ## [0.10.2](https://github.com/grafana/loki/compare/operator/v0.10.1...operator/v0.10.2) (2026-06-09)
 
 
