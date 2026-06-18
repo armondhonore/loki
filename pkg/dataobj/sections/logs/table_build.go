@@ -12,7 +12,9 @@ import (
 
 // buildTable builds a table from the set of provided records. The records are
 // sorted with [sortRecords] prior to building the table.
-func buildTable(buf *tableBuffer, pageSize, pageRowCount int, compressionOpts *dataset.CompressionOptions, records []Record, sortOrder SortOrder) *table {
+// It returns the built table and the number of duplicate records that were
+// skipped during building.
+func buildTable(buf *tableBuffer, pageSize, pageRowCount int, compressionOpts *dataset.CompressionOptions, records []Record, sortOrder SortOrder) (*table, int) {
 	sortRecords(records, sortOrder)
 
 	buf.Reset()
@@ -25,9 +27,10 @@ func buildTable(buf *tableBuffer, pageSize, pageRowCount int, compressionOpts *d
 
 	var prev Record
 	row := 0
+	dupes := 0
 	for _, record := range records {
 		if equalRecords(prev, record) {
-			// Skip equal records
+			dupes++
 			continue
 		}
 		prev = record
@@ -54,7 +57,7 @@ func buildTable(buf *tableBuffer, pageSize, pageRowCount int, compressionOpts *d
 		// Unreachable; we always ensure every required column is created.
 		panic(err)
 	}
-	return table
+	return table, dupes
 }
 
 // sortRecords sorts the set of records according to the specified sort order.

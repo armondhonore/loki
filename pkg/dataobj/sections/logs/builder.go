@@ -138,6 +138,8 @@ type Builder struct {
 	stripesCompressedSize   int // Estimated byte size of all elements in stripes (compressed).
 
 	sectionBuffer tableBuffer
+
+	dupesDropped int // Running count of duplicate records skipped by buildTable.
 }
 
 // Nwe creates a new logs section. The pageSize argument specifies how large
@@ -220,7 +222,8 @@ func (b *Builder) flushRecords(encLevel zstd.EncoderLevel) {
 		// If we are in AppendOrdered mode, we skip the stripe part of the algorithm, so we use the section buffer instead.
 		buf = &b.sectionBuffer
 	}
-	stripe := buildTable(buf, b.opts.PageSizeHint, b.opts.PageMaxRowCount, compressionOpts, b.records, b.opts.SortOrder)
+	stripe, dupes := buildTable(buf, b.opts.PageSizeHint, b.opts.PageMaxRowCount, compressionOpts, b.records, b.opts.SortOrder)
+	b.dupesDropped += dupes
 	b.stripes = append(b.stripes, stripe)
 	b.stripesUncompressedSize += stripe.UncompressedSize()
 	b.stripesCompressedSize += stripe.CompressedSize()
@@ -260,6 +263,12 @@ func (b *Builder) flushSectionOrdered() *table {
 	b.stripesCompressedSize = 0
 	b.stripesUncompressedSize = 0
 	return section
+}
+
+// DupesDropped returns the running count of duplicate records that were
+// skipped by buildTable across all flushes since the last Reset.
+func (b *Builder) DupesDropped() int {
+	return b.dupesDropped
 }
 
 // UncompressedSize returns the current uncompressed size of the logs section

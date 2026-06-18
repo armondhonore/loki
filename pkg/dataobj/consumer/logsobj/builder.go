@@ -521,7 +521,7 @@ func (b *Builder) CopyAndSort(ctx context.Context, obj *dataobj.Object) (*dataob
 		var streamRemap streamIDRemap
 		if len(schemaLabels) > 0 {
 			var err error
-			streamRemap, err = buildStreamIDRemap(ctx, obj, tenant, schemaLabels)
+			streamRemap, err = buildStreamIDRemap(ctx, b.logger, obj, tenant, schemaLabels)
 			if err != nil {
 				return nil, nil, fmt.Errorf("building stream ID remap for tenant %s: %w", tenant, err)
 			}
@@ -674,7 +674,7 @@ type streamWithSortKey struct {
 	oldID   int64
 }
 
-func buildStreamIDRemap(ctx context.Context, obj *dataobj.Object, tenant string, schemaLabels []string) (streamIDRemap, error) {
+func buildStreamIDRemap(ctx context.Context, logger log.Logger, obj *dataobj.Object, tenant string, schemaLabels []string) (streamIDRemap, error) {
 	var collected []streamWithSortKey
 	for _, sec := range obj.Sections().Filter(func(s *dataobj.Section) bool {
 		return streams.CheckSection(s) && s.Tenant == tenant
@@ -714,6 +714,13 @@ func buildStreamIDRemap(ctx context.Context, obj *dataobj.Object, tenant string,
 	}
 	for i, entry := range collected {
 		newID := int64(i + 1)
+		if prevNewID, exists := remap.ids[entry.oldID]; exists {
+			level.Error(logger).Log("msg", "buildStreamIDRemap: duplicate oldID, overwriting mapping",
+				"tenant", tenant, "oldID", entry.oldID,
+				"prevNewID", prevNewID, "newNewID", newID,
+				"labels", entry.stream.Labels.String())
+			panic(fmt.Sprintf("buildStreamIDRemap: duplicate stream id found for tenant %s", tenant))
+		}
 		remap.sortKeys[entry.oldID] = entry.sortKey
 		remap.ids[entry.oldID] = newID
 		entry.stream.ID = newID
