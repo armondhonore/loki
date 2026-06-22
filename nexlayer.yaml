@@ -1,0 +1,12 @@
+application:
+  name: loki
+  pods:
+  - name: app
+    image: grafana/loki:latest
+    path: /
+    servicePorts:
+    - 3100
+    volumes:
+    - name: loki-data
+      mountPath: /loki
+      size: 10Gi
