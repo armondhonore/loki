@@ -2,8 +2,8 @@ application:
   name: loki
   pods:
   - name: app
-    image: grafana/loki:latest
-    path: /
+    image: mirror.gcr.io/grafana/loki:latest
+    path: /ready
     servicePorts:
     - 3100
     volumes:
